@@ -109,6 +109,11 @@ def entrenar_modelo_knn(n_neighbors=5):
 
 
 def predecir_alumno(horas, asistencia, tareas):
+
+    if asistencia < 80:
+        return 0, 100.0
+
+    
     modelo = joblib.load(MODELO)
     scaler = joblib.load(ESCALADOR)
 

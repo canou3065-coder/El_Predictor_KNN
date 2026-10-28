@@ -136,6 +136,17 @@ if st.button("Predecir con KNN", use_container_width=True):
         use_container_width=True,
         hide_index=True
     )
+    # Descargar tabla de los vecinos más cercanos
+    
+    csv = vecinos.to_csv(index=False).encode("utf-8-sig")
+
+    st.download_button(
+    label="📥 Descargar tabla de alumnos",
+    data=csv,
+    file_name="tabla_alumnos_knn.csv",
+    mime="text/csv",
+    use_container_width=True
+    )
 
     st.info(
         "KNN compara al alumno con los ejemplos "
