@@ -1,88 +1,164 @@
+
 import numpy as np
 import pandas as pd
 import joblib
+
+from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from sklearn.metrics import accuracy_score, confusion_matrix
 
+BASE = Path(__file__).resolve().parent
+ARCHIVO = BASE / "alumnos.csv"
+MODELO = BASE / "modelo_knn.pkl"
+ESCALADOR = BASE / "scaler.pkl"
+DATOS = BASE / "datos_entrenamiento.pkl"
 
-def generar_datos_simulados(n_samples=500):
-    """
-    Genera un dataset de alumnos con un porcentaje de 'ruido'
-    para simular un entorno real impredecible (sin reglas fijas absolutas).
-    """
-    rng = np.random.default_rng(42)
-
-    horas = rng.uniform(0, 10, n_samples)
-    asistencia = rng.uniform(0, 100, n_samples)
-    tareas = rng.uniform(0, 100, n_samples)
-
-    # Probabilidad base según las variables
-    prob = (horas / 10) * 0.4 + (asistencia / 100) * 0.3 + (tareas / 100) * 0.3
-
-    # Agregar un factor aleatorio (ruido) para que no sea una regla matemática perfecta
-    ruido = rng.normal(0, 0.1, n_samples)
-    prob_real = np.clip(prob + ruido, 0, 1)
-
-    # 1 = APRUEBA, 0 = REPRUEBA
-    y = (prob_real >= 0.55).astype(int)
-    X = np.column_stack((horas, asistencia, tareas))
-
-    return X, y
+COLUMNAS = ["horas", "asistencia", "tareas"]
 
 
 def entrenar_modelo_knn(n_neighbors=5):
-    """
-    Entrena un modelo KNN (K-Nearest Neighbors).
-    """
-    X, y = generar_datos_simulados()
+    # Leer el dataset
+    df = pd.read_csv(ARCHIVO)
 
-    # 1. Separar datos (80% entrenamiento, 20% prueba)
+    # Revisar que tenga las columnas necesarias
+    requeridas = COLUMNAS + ["resultado"]
+
+    if not all(col in df.columns for col in requeridas):
+        raise ValueError(
+            "El CSV necesita: horas, asistencia, tareas, resultado"
+        )
+
+    df = df[requeridas].copy()
+
+    # Convertir los valores a numeros
+    for col in requeridas:
+        df[col] = pd.to_numeric(df[col], errors="raise")
+
+    if df.isnull().any().any():
+        raise ValueError("El dataset contiene valores vacios.")
+
+    if not df["resultado"].isin([0, 1]).all():
+        raise ValueError("Resultado debe ser 0 o 1.")
+
+    if not df["horas"].between(0, 10).all():
+        raise ValueError("Horas debe estar entre 0 y 10.")
+
+    for col in ["asistencia", "tareas"]:
+        if not df[col].between(0, 100).all():
+            raise ValueError(f"{col} debe estar entre 0 y 100.")
+
+    X = df[COLUMNAS]
+    y = df["resultado"].astype(int)
+
+    if y.nunique() != 2:
+        raise ValueError(
+            "Se necesitan alumnos aprobados y reprobados."
+        )
+
+    if y.value_counts().min() < 2:
+        raise ValueError(
+            "Se necesitan al menos 2 ejemplos de cada clase."
+        )
+
+    # Separar 80% entrenamiento y 20% prueba
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
+        X, y,
+        test_size=0.20,
+        random_state=42,
+        stratify=y
     )
 
-    # 2. Escalar características (CRUCIAL para KNN para medir distancias correctamente)
+    if len(X_train) < n_neighbors:
+        raise ValueError(
+            "No hay suficientes alumnos para ese numero de vecinos."
+        )
+
+    # Normalizar los datos
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # 3. Crear y entrenar el modelo KNN
-    modelo_knn = KNeighborsClassifier(n_neighbors=n_neighbors)
-    modelo_knn.fit(X_train_scaled, y_train)
+    # Entrenar KNN
+    modelo = KNeighborsClassifier(
+        n_neighbors=n_neighbors
+    )
 
-    # 4. Evaluación
-    y_pred = modelo_knn.predict(X_test_scaled)
+    modelo.fit(X_train_scaled, y_train)
+
+    # Evaluar con alumnos no vistos
+    y_pred = modelo.predict(X_test_scaled)
+
     exactitud = accuracy_score(y_test, y_pred)
-    matriz = confusion_matrix(y_test, y_pred, labels=[0, 1])
 
-    # Guardar modelo y escalador
-    joblib.dump(modelo_knn, 'modelo_knn.pkl')
-    joblib.dump(scaler, 'scaler.pkl')
+    matriz = confusion_matrix(
+        y_test, y_pred, labels=[0, 1]
+    )
+
+    # Guardar el modelo y los datos necesarios
+    joblib.dump(modelo, MODELO)
+    joblib.dump(scaler, ESCALADOR)
+
+    datos = X_train.copy()
+    datos["resultado"] = y_train.to_numpy()
+
+    joblib.dump(datos.reset_index(drop=True), DATOS)
 
     return exactitud, matriz, len(X_train), len(X_test)
 
 
 def predecir_alumno(horas, asistencia, tareas):
-    """
-    Carga el modelo y el escalador para predecir sobre un alumno nuevo.
-    """
-    modelo = joblib.load('modelo_knn.pkl')
-    scaler = joblib.load('scaler.pkl')
+    modelo = joblib.load(MODELO)
+    scaler = joblib.load(ESCALADOR)
 
-    nuevo_alumno = np.array([[horas, asistencia, tareas]])
-    nuevo_alumno_scaled = scaler.transform(nuevo_alumno)
+    alumno = pd.DataFrame(
+        [[horas, asistencia, tareas]],
+        columns=COLUMNAS
+    )
 
-    prediccion = int(modelo.predict(nuevo_alumno_scaled)[0])
-    probabilidades = modelo.predict_proba(nuevo_alumno_scaled)[0]
-    confianza = float(probabilidades[prediccion]) * 100
+    alumno_escalado = scaler.transform(alumno)
+
+    prediccion = int(modelo.predict(alumno_escalado)[0])
+
+    probabilidades = modelo.predict_proba(alumno_escalado)[0]
+
+    indice = list(modelo.classes_).index(prediccion)
+    confianza = float(probabilidades[indice]) * 100
 
     return prediccion, confianza
 
 
-if __name__ == '__main__':
-    acc, cm, n_train, n_test = entrenar_modelo_knn()
-    print("Modelo KNN entrenado exitosamente.")
+def obtener_vecinos(horas, asistencia, tareas):
+    modelo = joblib.load(MODELO)
+    scaler = joblib.load(ESCALADOR)
+    datos = joblib.load(DATOS)
+
+    alumno = pd.DataFrame(
+        [[horas, asistencia, tareas]],
+        columns=COLUMNAS
+    )
+
+    alumno_escalado = scaler.transform(alumno)
+
+    distancias, indices = modelo.kneighbors(alumno_escalado)
+
+    vecinos = datos.iloc[indices[0]].copy()
+    vecinos["distancia"] = distancias[0]
+
+    vecinos["resultado"] = vecinos["resultado"].map({
+        0: "REPRUEBA",
+        1: "APRUEBA"
+    })
+
+    return vecinos.reset_index(drop=True)
+
+
+if __name__ == "__main__":
+    acc, matriz, train, test = entrenar_modelo_knn()
+
+    print("Modelo KNN entrenado correctamente")
     print(f"Exactitud: {acc:.2%}")
-    print("Matriz de confusión:\n", cm)
+    print("Matriz de confusion:")
+    print(matriz)
+

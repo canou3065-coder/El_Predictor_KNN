@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+modelo_knn.pkl
+scaler.pkl
+datos_entrenamiento.pklS
